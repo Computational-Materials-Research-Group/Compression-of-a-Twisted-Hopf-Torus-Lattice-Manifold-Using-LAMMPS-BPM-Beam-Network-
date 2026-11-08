@@ -1,0 +1,66 @@
+# in.compress  -  quasi-static compression of a lattice manifold (BPM beam network)
+#
+# run:   lmp -in in.compress -var model torus
+#        lmp -in in.compress -var model coral -var strain 0.08 -var tload 300
+#
+# model   : torus | breather | coral | radiolarian
+# strain  : engineering strain applied to the loaded span
+# tload   : loading time (must be long compared with span / wave speed = 10)
+
+variable model   index torus
+variable strain  index 0.05
+variable tload   index 150.0
+variable dt0     index 0.004
+variable visc    index 0.002
+variable nout    index 250
+variable ndump   index 1000          # dump a frame every ndump steps (full run = 37500 steps)
+
+units           lj
+atom_style      bpm/sphere
+boundary        f f f
+newton          on off
+special_bonds   lj 0 1 1 coul 1 1 1
+comm_modify     vel yes cutoff 1.5
+timestep        ${dt0}
+
+pair_style      zero 0.3
+read_data       ${model}.data
+pair_coeff      * *
+
+bond_style      bpm/rotational normalize yes
+include         ${model}.bonds
+include         ${model}.setup          # defines groups: base, load, free
+
+# ---------- dynamics ----------
+velocity        all set 0.0 0.0 0.0
+fix             integ free nve/bpm/sphere
+fix             drag  free viscous ${visc}
+
+variable        vel equal ${strain}*${span}/${tload}
+fix             mover load move linear $(v_dirx*v_vel) $(v_diry*v_vel) $(v_dirz*v_vel)
+
+# ---------- measurements ----------
+compute         fl   load reduce sum fx fy fz
+compute         fb   base reduce sum fx fy fz
+compute         ke   free ke
+compute         nb   all nbond/atom
+compute         nbs  all reduce sum c_nb
+
+variable        disp equal step*dt*v_vel
+variable        Fres equal -(c_fl[1]*v_dirx+c_fl[2]*v_diry+c_fl[3]*v_dirz)
+variable        Fbas equal  (c_fb[1]*v_dirx+c_fb[2]*v_diry+c_fb[3]*v_dirz)
+variable        nint equal c_nbs/2
+
+thermo          ${nout}
+thermo_style    custom step time v_disp v_Fres v_nint c_ke
+thermo_modify   norm no lost warn
+
+fix             out all ave/time ${nout} 1 ${nout} v_disp v_Fres v_Fbas v_nint c_ke &
+                file curve_${model}.dat
+dump            traj all custom ${ndump} ${model}.dump id type x y z c_nb
+dump_modify     traj sort id
+
+variable        nsteps equal round(${tload}/${dt0})
+run             ${nsteps}
+
+write_data      ${model}_final.data nocoeff
